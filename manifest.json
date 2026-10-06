@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "简历字段助手",
+  "version": "1.3.0",
+  "description": "在网申页面旁边常驻显示、搜索并一键复制个人简历字段。",
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "显示/隐藏简历字段助手"
+  },
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "显示或隐藏简历字段助手"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

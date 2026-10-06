@@ -1,0 +1,13 @@
+# Local/private resume data and backups
+*备份*.json
+private/
+private-*/
+
+# Extracted build folder
+简历字段助手-Edge/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
