@@ -1,8 +1,6 @@
 (() => {
-  if (window.__resumeFieldAssistantLoaded) return;
-  window.__resumeFieldAssistantLoaded = true;
-
   const STORAGE_KEY = "resumeFieldAssistantData";
+  const VIEW_STORAGE_KEY = "resumeFieldAssistantViewState";
   const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const escapeHtml = (value = "") => String(value)
     .replaceAll("&", "&amp;")
@@ -14,7 +12,7 @@
   const defaultData = () => {
     const profileId = makeId();
     return {
-      version: 1,
+      version: 2,
       activeProfileId: profileId,
       profiles: [{
         id: profileId,
@@ -39,7 +37,7 @@
         ]
       }],
       history: [],
-      panel: { width: 360, height: 680, top: 72, right: 18, collapsed: false, hidden: false }
+      panel: { width: 360, height: 680, top: 72, right: 18, collapsed: false }
     };
   };
 
@@ -50,6 +48,11 @@
   let toastTimer;
   let modalMode = null;
   let draggedField = null;
+  let draggedSectionId = null;
+  let pendingRemoteData = null;
+  let isPanelVisible = false;
+  let showAfterLoad = false;
+  let isSectionNavOpen = false;
 
   const css = `
     :host { all: initial; color-scheme: light; }
@@ -64,10 +67,13 @@
       color: #182230; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; font-size: 13px;
     }
     .rfa-panel.hidden { display: none; }
-    .rfa-panel.collapsed { width: 278px !important; height: 44px !important; min-height: 44px; resize: none; }
-    .rfa-panel.collapsed .rfa-body, .rfa-panel.collapsed .rfa-toolbar, .rfa-panel.collapsed .rfa-footer { display: none; }
+    .rfa-panel.collapsed { width: 44px !important; height: 44px !important; min-width: 44px; min-height: 44px; border-radius: 12px; resize: none; }
+    .rfa-panel.collapsed .rfa-content-area, .rfa-panel.collapsed .rfa-toolbar, .rfa-panel.collapsed .rfa-footer { display: none; }
+    .rfa-panel.collapsed .rfa-title, .rfa-panel.collapsed .rfa-icon { display: none; }
+    .rfa-panel.collapsed .rfa-header { padding: 5px; cursor: default; }
+    .rfa-panel.collapsed .rfa-mark { width: 32px; height: 32px; border-radius: 9px; font-size: 12px; cursor: pointer; }
     .rfa-header { height: 44px; flex: 0 0 44px; padding: 7px 7px 7px 10px; display: flex; align-items: center; gap: 6px; background: #172554; color: white; cursor: move; user-select: none; }
-    .rfa-mark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: #4f7cff; font-weight: 800; font-size: 11px; }
+    .rfa-mark { width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 6px; background: #4f7cff; color: white; font-weight: 800; font-size: 11px; }
     .rfa-title { min-width: 0; flex: 1; font-weight: 700; letter-spacing: .2px; }
     .rfa-icon { width: 28px; height: 28px; border: 0; border-radius: 7px; background: rgba(255,255,255,.1); color: white; cursor: pointer; }
     .rfa-icon:hover { background: rgba(255,255,255,.2); }
@@ -81,9 +87,21 @@
     .rfa-search-wrap { position: relative; }
     .rfa-search { padding-left: 32px; }
     .rfa-search-icon { position: absolute; left: 10px; top: 6px; color: #718096; }
-    .rfa-body { flex: 1; min-height: 0; overflow: auto; padding: 7px; }
+    .rfa-content-area { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); background: #f7f8fc; }
+    .rfa-nav-float { position: fixed; z-index: 2147483646; width: 164px; max-height: min(72vh, 560px); display: flex; flex-direction: column; padding: 8px 6px; border: 1px solid rgba(17,24,39,.14); border-radius: 12px; background: rgba(247,248,252,.98); box-shadow: 0 16px 42px rgba(15,23,42,.25); overflow: auto; }
+    .rfa-nav-float.hidden { display: none; }
+    .rfa-nav-float-title { padding: 2px 7px 7px; color: #46536a; font-size: 11px; font-weight: 800; }
+    .rfa-section-nav-btn { width: 100%; min-height: 34px; margin-bottom: 5px; padding: 5px 7px; border: 0; border-radius: 7px; background: transparent; color: #68748a; cursor: pointer; font-size: 11px; line-height: 1.25; text-align: left; overflow: hidden; }
+    .rfa-section-nav-btn:hover, .rfa-section-nav-btn.active { background: #dfe7fb; color: #284fab; }
+    .rfa-section-nav-index { display: block; margin-bottom: 2px; font-weight: 800; }
+    .rfa-section-nav-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .rfa-body { min-width: 0; min-height: 0; overflow: auto; padding: 7px; }
     .rfa-section { margin-bottom: 7px; border: 1px solid #e2e5ed; background: #fff; border-radius: 10px; overflow: hidden; }
+    .rfa-section.dragging { opacity: .38; }
+    .rfa-section.section-drop-target { border-color: #4f7cff; box-shadow: 0 0 0 2px rgba(79,124,255,.2); }
     .rfa-section-head { display: flex; align-items: center; min-height: 32px; padding: 3px 5px 3px 9px; background: #f0f3fa; }
+    .rfa-section-handle { flex: 0 0 auto; width: 20px; height: 27px; display: grid; place-items: center; margin-left: -5px; color: #929db0; cursor: grab; user-select: none; }
+    .rfa-section-handle:active { cursor: grabbing; }
     .rfa-section-name { flex: 1; font-size: 12px; font-weight: 800; color: #46536a; text-transform: uppercase; letter-spacing: .5px; }
     .rfa-edit { width: 27px; height: 27px; border: 0; border-radius: 7px; color: #758196; background: transparent; cursor: pointer; }
     .rfa-edit:hover { color: #2f5fea; background: #e4eaff; }
@@ -130,15 +148,64 @@
   `;
 
   async function load() {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    data = stored[STORAGE_KEY] || defaultData();
-    if (!data.panel) data.panel = defaultData().panel;
+    const stored = await chrome.storage.local.get([STORAGE_KEY, VIEW_STORAGE_KEY]);
+    const shared = stored[STORAGE_KEY] || defaultData();
+    const view = stored[VIEW_STORAGE_KEY] || {};
+    data = {
+      ...shared,
+      version: 2,
+      panel: view.panel || shared.panel || defaultData().panel,
+      activeProfileId: view.activeProfileId || shared.activeProfileId
+    };
+    delete data.panel.hidden;
     if (!Array.isArray(data.history)) data.history = [];
+    if (showAfterLoad) isPanelVisible = true;
+    if (!stored[STORAGE_KEY]) await saveSharedAndView();
     mount();
   }
 
-  function save() {
-    return chrome.storage.local.set({ [STORAGE_KEY]: data });
+  function saveShared() {
+    data.version = 2;
+    data.revision = makeId();
+    return chrome.storage.local.set({
+      [STORAGE_KEY]: {
+        version: data.version,
+        revision: data.revision,
+        profiles: data.profiles,
+        history: data.history
+      }
+    });
+  }
+
+  function saveView() {
+    return chrome.storage.local.set({
+      [VIEW_STORAGE_KEY]: {
+        activeProfileId: data.activeProfileId,
+        panel: data.panel
+      }
+    });
+  }
+
+  function saveSharedAndView() {
+    return Promise.all([saveShared(), saveView()]);
+  }
+
+  function applyRemoteData(fresh, showNotice = true) {
+    if (!fresh?.profiles?.length) return;
+    const currentPanel = data.panel;
+    const currentProfileId = data.activeProfileId;
+    data = {
+      ...fresh,
+      version: 2,
+      history: Array.isArray(fresh.history) ? fresh.history : [],
+      panel: currentPanel,
+      activeProfileId: fresh.profiles.some((item) => item.id === currentProfileId) ? currentProfileId : fresh.profiles[0].id
+    };
+    pendingRemoteData = null;
+    if (root) {
+      render({ preserveScroll: true });
+      if (showNotice) toast("已同步其他页面的最新修改");
+    }
   }
 
   function recordChange(action, profileName, sectionName = "—", fieldName = "—") {
@@ -148,17 +215,11 @@
   }
 
   async function refreshData() {
-    const currentPanel = { ...data.panel };
-    const currentProfileId = data.activeProfileId;
     const stored = await chrome.storage.local.get(STORAGE_KEY);
     const fresh = stored[STORAGE_KEY];
     if (!fresh?.profiles?.length) return toast("没有找到可刷新的数据");
-    fresh.panel = currentPanel;
-    fresh.history = Array.isArray(fresh.history) ? fresh.history : [];
-    if (fresh.profiles.some((item) => item.id === currentProfileId)) fresh.activeProfileId = currentProfileId;
-    data = fresh;
     modalMode = null;
-    render({ preserveScroll: true });
+    applyRemoteData(fresh, false);
     toast("数据已刷新");
   }
 
@@ -167,10 +228,11 @@
   }
 
   function mount() {
+    document.getElementById("resume-field-assistant-host")?.remove();
     host = document.createElement("div");
     host.id = "resume-field-assistant-host";
     root = host.attachShadow({ mode: "open" });
-    root.innerHTML = `<style>${css}</style><div class="rfa-panel"></div>`;
+    root.innerHTML = `<style>${css}</style><div class="rfa-nav-float hidden"></div><div class="rfa-panel"></div>`;
     document.documentElement.appendChild(host);
     isolateEditorEvents();
     render();
@@ -193,21 +255,26 @@
   function render({ preserveScroll = false } = {}) {
     const previousScrollTop = preserveScroll ? (root.querySelector(".rfa-body")?.scrollTop || 0) : 0;
     const panel = root.querySelector(".rfa-panel");
+    const navFloat = root.querySelector(".rfa-nav-float");
     const p = activeProfile();
     const panelState = data.panel;
-    panel.className = `rfa-panel${panelState.collapsed ? " collapsed" : ""}${panelState.hidden ? " hidden" : ""}`;
+    panel.className = `rfa-panel${panelState.collapsed ? " collapsed" : ""}${isPanelVisible ? "" : " hidden"}`;
     panel.style.width = `${panelState.width || 360}px`;
     panel.style.height = `${panelState.height || 680}px`;
     panel.style.top = `${Math.max(6, Math.min(panelState.top ?? 72, window.innerHeight - 54))}px`;
     panel.style.right = `${Math.max(6, panelState.right ?? 18)}px`;
 
     const query = searchText.trim().toLowerCase();
-    const sectionsHtml = p.sections.map((section) => {
+    const visibleSections = p.sections.map((section) => {
       const fields = section.fields.filter((field) => !query || `${section.name} ${field.label} ${field.value}`.toLowerCase().includes(query));
-      if (query && fields.length === 0) return "";
-      return `<section class="rfa-section">
+      return { section, fields };
+    }).filter(({ fields }) => !query || fields.length > 0);
+    const sectionsHtml = visibleSections.map(({ section, fields }) => {
+      return `<section class="rfa-section" data-section-id="${section.id}">
         <div class="rfa-section-head">
+          <span class="rfa-section-handle" draggable="true" data-section="${section.id}" title="拖动整个板块">☰</span>
           <div class="rfa-section-name">${escapeHtml(section.name)}</div>
+          <button class="rfa-edit" data-action="copy-section" data-section="${section.id}" title="复制整个板块">▣</button>
           <button class="rfa-edit" data-action="edit-section" data-section="${section.id}" title="编辑板块">✎</button>
         </div>
         <div class="rfa-fields" data-section="${section.id}">${fields.map((field) => `
@@ -221,10 +288,16 @@
         </div>
       </section>`;
     }).join("");
+    const sectionNavHtml = visibleSections.map(({ section }, index) => `
+      <button class="rfa-section-nav-btn${index === 0 ? " active" : ""}" data-action="jump-section" data-section="${section.id}" title="跳转到：${escapeHtml(section.name)}">
+        <span class="rfa-section-nav-index">${index + 1}</span><span class="rfa-section-nav-name">${escapeHtml(section.name)}</span>
+      </button>`).join("");
+    navFloat.className = `rfa-nav-float${isSectionNavOpen && isPanelVisible ? "" : " hidden"}`;
+    navFloat.innerHTML = `<div class="rfa-nav-float-title">板块导航</div>${sectionNavHtml || `<div class="rfa-empty">暂无板块</div>`}`;
 
     panel.innerHTML = `
       <div class="rfa-header">
-        <div class="rfa-mark">CV</div><div class="rfa-title">简历字段助手</div>
+        <button class="rfa-mark" data-action="mark" title="${panelState.collapsed ? "展开简历字段助手" : "简历字段助手"}">CV</button><div class="rfa-title">简历字段助手</div>
         <button class="rfa-icon" data-action="full-height" title="贴边全高">↕</button>
         <button class="rfa-icon" data-action="collapse" title="收起/展开">${panelState.collapsed ? "□" : "—"}</button>
         <button class="rfa-icon" data-action="hide" title="隐藏（Alt+Shift+R 恢复）">×</button>
@@ -237,10 +310,13 @@
           <button class="rfa-small-btn" data-action="profile-menu" title="管理岗位套装">管理</button>
           <button class="rfa-small-btn" data-action="refresh-data" title="读取其他页面的最新修改">刷新</button>
           <button class="rfa-small-btn" data-action="history" title="查看修改记录">记录</button>
+          <button class="rfa-small-btn" data-action="section-nav-toggle" title="${isSectionNavOpen ? "关闭" : "打开"}板块导航">导航</button>
         </div>
         <div class="rfa-search-wrap"><span class="rfa-search-icon">⌕</span><input class="rfa-input rfa-search" data-action="search" value="${escapeHtml(searchText)}" placeholder="搜索字段名称或内容"></div>
       </div>
-      <main class="rfa-body">${sectionsHtml || `<div class="rfa-empty">没有找到相关字段<br>可以换个关键词试试</div>`}</main>
+      <div class="rfa-content-area">
+        <main class="rfa-body">${sectionsHtml || `<div class="rfa-empty">没有找到相关字段<br>可以换个关键词试试</div>`}</main>
+      </div>
       <footer class="rfa-footer">
         <button class="rfa-small-btn" data-action="add-field">＋字段</button>
         <button class="rfa-small-btn" data-action="add-section">＋板块</button>
@@ -248,6 +324,8 @@
       </footer>`;
     bindEvents();
     if (preserveScroll) root.querySelector(".rfa-body").scrollTop = previousScrollTop;
+    positionSectionNav();
+    updateActiveSectionNav();
     if (modalMode) openModal(modalMode, true);
   }
 
@@ -259,7 +337,7 @@
       element.addEventListener("focus", () => showFieldTooltip(element));
       element.addEventListener("blur", hideFieldTooltip);
     });
-    panel.querySelectorAll("[data-action]").forEach((element) => {
+    root.querySelectorAll("[data-action]").forEach((element) => {
       const action = element.dataset.action;
       if (action === "search") {
         element.addEventListener("input", (event) => {
@@ -270,17 +348,25 @@
           next.focus(); next.setSelectionRange(pos, pos);
         });
       } else if (action === "profile-select") {
-        element.addEventListener("change", async (event) => { data.activeProfileId = event.target.value; await save(); render(); });
+        element.addEventListener("change", async (event) => { data.activeProfileId = event.target.value; await saveView(); render(); });
       } else if (action === "copy") {
         element.addEventListener("click", () => copyField(element.dataset.section, element.dataset.field));
       } else if (action === "preview") {
         element.addEventListener("click", () => previewField(element.dataset.section, element.dataset.field));
+      } else if (action === "copy-section") {
+        element.addEventListener("click", () => copySection(element.dataset.section));
+      } else if (action === "mark") {
+        element.addEventListener("click", async () => {
+          if (!data.panel.collapsed) return;
+          data.panel.collapsed = false;
+          await saveView(); render();
+        });
       } else if (action === "full-height") {
         element.addEventListener("click", toggleFullHeight);
       } else if (action === "collapse") {
-        element.addEventListener("click", async () => { data.panel.collapsed = !data.panel.collapsed; await save(); render(); });
+        element.addEventListener("click", async () => { data.panel.collapsed = true; await saveView(); render(); });
       } else if (action === "hide") {
-        element.addEventListener("click", async () => { data.panel.hidden = true; await save(); render(); });
+        element.addEventListener("click", () => { isPanelVisible = false; isSectionNavOpen = false; render(); });
       } else if (action === "add-field") element.addEventListener("click", () => showFieldDialog());
       else if (action === "edit-field") element.addEventListener("click", () => showFieldDialog(element.dataset.section, element.dataset.field));
       else if (action === "add-section") element.addEventListener("click", () => showSectionDialog());
@@ -288,9 +374,107 @@
       else if (action === "profile-menu") element.addEventListener("click", showProfileDialog);
       else if (action === "refresh-data") element.addEventListener("click", refreshData);
       else if (action === "history") element.addEventListener("click", showHistoryDialog);
+      else if (action === "section-nav-toggle") element.addEventListener("click", () => {
+        isSectionNavOpen = !isSectionNavOpen;
+        render({ preserveScroll: true });
+      });
+      else if (action === "jump-section") element.addEventListener("click", () => jumpToSection(element.dataset.section));
       else if (action === "bulk-import") element.addEventListener("click", showImportDialog);
     });
+    panel.querySelector(".rfa-body")?.addEventListener("scroll", updateActiveSectionNav, { passive: true });
+    bindSectionDragging(panel);
     bindFieldDragging(panel);
+  }
+
+  function jumpToSection(sectionId) {
+    const body = root.querySelector(".rfa-body");
+    const target = root.querySelector(`.rfa-section[data-section-id="${sectionId}"]`);
+    if (!body || !target) return;
+    const top = body.scrollTop + target.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTo({ top, behavior: "smooth" });
+  }
+
+  function updateActiveSectionNav() {
+    const body = root?.querySelector(".rfa-body");
+    if (!body) return;
+    const sections = [...root.querySelectorAll(".rfa-section[data-section-id]")];
+    if (!sections.length) return;
+    const bodyTop = body.getBoundingClientRect().top;
+    let activeId = sections[0].dataset.sectionId;
+    for (const section of sections) {
+      if (section.getBoundingClientRect().top <= bodyTop + 24) activeId = section.dataset.sectionId;
+      else break;
+    }
+    root.querySelectorAll(".rfa-section-nav-btn").forEach((button) => button.classList.toggle("active", button.dataset.section === activeId));
+  }
+
+  function positionSectionNav() {
+    const nav = root?.querySelector(".rfa-nav-float");
+    const panel = root?.querySelector(".rfa-panel");
+    if (!nav || !panel || nav.classList.contains("hidden") || panel.classList.contains("hidden")) return;
+    const rect = panel.getBoundingClientRect();
+    const navWidth = nav.getBoundingClientRect().width || 164;
+    const navHeight = nav.getBoundingClientRect().height || 200;
+    const gap = 8;
+    const top = Math.max(6, Math.min(rect.top, window.innerHeight - navHeight - 6));
+    let left = rect.left - navWidth - gap;
+    if (left < 6) left = rect.right + gap;
+    left = Math.max(6, Math.min(left, window.innerWidth - navWidth - 6));
+    nav.style.left = `${Math.round(left)}px`;
+    nav.style.top = `${Math.round(top)}px`;
+  }
+
+  function bindSectionDragging(panel) {
+    panel.querySelectorAll(".rfa-section-handle").forEach((handle) => {
+      handle.addEventListener("dragstart", (event) => {
+        draggedSectionId = handle.dataset.section;
+        handle.closest(".rfa-section")?.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedSectionId);
+        event.stopPropagation();
+      });
+      handle.addEventListener("dragend", () => {
+        draggedSectionId = null;
+        clearSectionDragStyles();
+      });
+    });
+    panel.querySelectorAll(".rfa-section").forEach((sectionNode) => {
+      sectionNode.addEventListener("dragover", (event) => {
+        if (!draggedSectionId) return;
+        event.preventDefault(); event.stopPropagation();
+        clearSectionDragStyles(true);
+        if (sectionNode.dataset.sectionId !== draggedSectionId) sectionNode.classList.add("section-drop-target");
+      });
+      sectionNode.addEventListener("drop", async (event) => {
+        if (!draggedSectionId) return;
+        event.preventDefault(); event.stopPropagation();
+        await moveSection(draggedSectionId, sectionNode, event.clientY);
+      });
+    });
+  }
+
+  function clearSectionDragStyles(keepDragging = false) {
+    root.querySelectorAll(".rfa-section").forEach((node) => {
+      node.classList.remove("section-drop-target");
+      if (!keepDragging) node.classList.remove("dragging");
+    });
+  }
+
+  async function moveSection(sourceId, targetNode, pointerY) {
+    const targetId = targetNode?.dataset.sectionId;
+    if (!targetId || targetId === sourceId) { draggedSectionId = null; clearSectionDragStyles(); return; }
+    const profile = activeProfile();
+    const sourceIndex = profile.sections.findIndex((item) => item.id === sourceId);
+    if (sourceIndex < 0) return;
+    const [section] = profile.sections.splice(sourceIndex, 1);
+    const currentTargetIndex = profile.sections.findIndex((item) => item.id === targetId);
+    const rect = targetNode.getBoundingClientRect();
+    const targetIndex = currentTargetIndex + (pointerY >= rect.top + rect.height / 2 ? 1 : 0);
+    profile.sections.splice(targetIndex, 0, section);
+    recordChange("调整板块顺序", profile.name, section.name);
+    draggedSectionId = null;
+    await saveShared(); render({ preserveScroll: true });
+    toast("板块顺序已更新");
   }
 
   function bindFieldDragging(panel) {
@@ -361,7 +545,7 @@
     targetSection.fields.splice(targetIndex, 0, field);
     recordChange(source.sectionId === targetSectionId ? "调整顺序" : "跨板块移动", profile.name, targetSection.name, field.label);
     draggedField = null;
-    await save();
+    await saveShared();
     render({ preserveScroll: true });
     toast(source.sectionId === targetSectionId ? "字段顺序已更新" : "字段已移动到其他板块");
   }
@@ -371,15 +555,31 @@
     const section = activeProfile().sections.find((item) => item.id === sectionId);
     const field = section?.fields.find((item) => item.id === fieldId);
     if (!field) return;
+    await writeClipboard(field.value);
+    toast(`已复制：${field.label}`);
+  }
+
+  async function writeClipboard(value) {
     try {
-      await navigator.clipboard.writeText(field.value);
-      toast(`已复制：${field.label}`);
+      await navigator.clipboard.writeText(value);
     } catch (_) {
       const text = document.createElement("textarea");
-      text.value = field.value; document.body.appendChild(text); text.select();
+      text.value = value; document.body.appendChild(text); text.select();
       document.execCommand("copy"); text.remove();
-      toast(`已复制：${field.label}`);
     }
+  }
+
+  async function copySection(sectionId) {
+    const section = activeProfile().sections.find((item) => item.id === sectionId);
+    if (!section) return;
+    const lines = [`## ${section.name}`];
+    for (const field of section.fields) {
+      const valueLines = String(field.value || "").split("\n");
+      lines.push(`- [${field.type === "copy" ? "复制" : "展示"}] ${field.label}: ${valueLines[0] || ""}`);
+      for (const continuation of valueLines.slice(1)) lines.push(`  ${continuation}`);
+    }
+    await writeClipboard(lines.join("\n"));
+    toast(`板块“${section.name}”已复制，可粘贴到其他套装的批量导入中`);
   }
 
   function previewField(sectionId, fieldId) {
@@ -432,7 +632,7 @@
       Object.assign(data.panel, data.panel.restoreGeometry || { top: 72, right: 18, width: 360, height: 680 });
       data.panel.fullHeight = false;
     }
-    await save(); render();
+    await saveView(); render();
   }
 
   function toast(message) {
@@ -458,12 +658,22 @@
     root.querySelector(".rfa-panel").appendChild(overlay);
     overlay.querySelectorAll("[data-close]").forEach((node) => node.addEventListener("click", closeModal));
     overlay.addEventListener("click", (event) => { if (event.target === overlay) closeModal(); });
-    overlay.querySelector("[data-save]").addEventListener("click", () => onSave?.(overlay));
-    overlay.querySelector("[data-delete]")?.addEventListener("click", () => onDelete?.(overlay));
+    overlay.querySelector("[data-save]").addEventListener("click", () => {
+      if (pendingRemoteData) return toast("其他页面有新修改，请先取消此窗口并重新编辑");
+      onSave?.(overlay);
+    });
+    overlay.querySelector("[data-delete]")?.addEventListener("click", () => {
+      if (pendingRemoteData) return toast("其他页面有新修改，请先取消此窗口并重新编辑");
+      onDelete?.(overlay);
+    });
     setTimeout(() => overlay.querySelector("input, textarea, select")?.focus(), 0);
   }
 
-  function closeModal() { modalMode = null; root.querySelector(".rfa-overlay")?.remove(); }
+  function closeModal() {
+    modalMode = null;
+    root.querySelector(".rfa-overlay")?.remove();
+    if (pendingRemoteData) applyRemoteData(pendingRemoteData);
+  }
 
   function showFieldDialog(sectionId, fieldId) {
     modalMode = { type: "field", sectionId, fieldId };
@@ -514,13 +724,13 @@
             if (oldSection.id !== targetSection.id) { oldSection.fields = oldSection.fields.filter((f) => f.id !== field.id); targetSection.fields.push(field); action = "修改并移动"; }
           } else targetSection.fields.push({ id: makeId(), label, value, type: box.querySelector('[name="type"]').value });
           recordChange(action, p.name, targetSection.name, label);
-          modalMode = null; await save(); render({ preserveScroll: true }); toast(field ? "字段已更新" : "字段已新增");
+          modalMode = null; await saveShared(); render({ preserveScroll: true }); toast(field ? "字段已更新" : "字段已新增");
         },
         onDelete: field ? async () => {
           if (!confirm(`确定删除“${field.label}”吗？`)) return;
           recordChange("删除字段", p.name, section.name, field.label);
           section.fields = section.fields.filter((item) => item.id !== field.id);
-          modalMode = null; await save(); render({ preserveScroll: true });
+          modalMode = null; await saveShared(); render({ preserveScroll: true });
         } : null
       });
     } else if (mode.type === "section") {
@@ -530,13 +740,13 @@
           const name = box.querySelector('[name="name"]').value.trim(); if (!name) return toast("请填写板块名称");
           if (section) { section.name = name; recordChange("修改板块", p.name, name); }
           else { p.sections.push({ id: makeId(), name, fields: [] }); recordChange("新增板块", p.name, name); }
-          modalMode = null; await save(); render();
+          modalMode = null; await saveShared(); render();
         },
         onDelete: section ? async () => {
           if (!confirm(`删除“${section.name}”及其中全部字段？`)) return;
           recordChange("删除板块", p.name, section.name);
           p.sections = p.sections.filter((item) => item.id !== section.id);
-          modalMode = null; await save(); render();
+          modalMode = null; await saveShared(); render();
         } : null
       });
     } else if (mode.type === "profile") {
@@ -544,12 +754,12 @@
         <div class="rfa-form-row"><label>当前套装名称</label><input class="rfa-input" name="name" value="${escapeHtml(p.name)}"></div>
         <div class="rfa-help">“新增空白套装”适合从头填写；“复制当前套装”适合基于相近岗位微调。</div>
         <div style="display:flex;gap:7px;flex-wrap:wrap"><button class="rfa-small-btn" data-new>新增空白套装</button><button class="rfa-small-btn" data-clone>复制当前套装</button><button class="rfa-small-btn" data-export>导出备份</button><button class="rfa-small-btn" data-import-json>导入备份</button><input type="file" accept="application/json" data-json-file hidden></div>`, {
-        onSave: async (box) => { const name = box.querySelector('[name="name"]').value.trim(); if (!name) return toast("请填写套装名称"); p.name = name; recordChange("修改套装", name); modalMode = null; await save(); render(); },
-        onDelete: data.profiles.length > 1 ? async () => { if (!confirm(`确定删除套装“${p.name}”吗？`)) return; recordChange("删除套装", p.name); data.profiles = data.profiles.filter((item) => item.id !== p.id); data.activeProfileId = data.profiles[0].id; modalMode = null; await save(); render(); } : null
+        onSave: async (box) => { const name = box.querySelector('[name="name"]').value.trim(); if (!name) return toast("请填写套装名称"); p.name = name; recordChange("修改套装", name); modalMode = null; await saveShared(); render(); },
+        onDelete: data.profiles.length > 1 ? async () => { if (!confirm(`确定删除套装“${p.name}”吗？`)) return; recordChange("删除套装", p.name); data.profiles = data.profiles.filter((item) => item.id !== p.id); data.activeProfileId = data.profiles[0].id; modalMode = null; await saveSharedAndView(); render(); } : null
       });
       const box = root.querySelector(".rfa-overlay");
-      box.querySelector("[data-new]").addEventListener("click", async () => { const profile = { id: makeId(), name: "新岗位套装", sections: [] }; data.profiles.push(profile); data.activeProfileId = profile.id; recordChange("新增套装", profile.name); modalMode = null; await save(); render(); showProfileDialog(); });
-      box.querySelector("[data-clone]").addEventListener("click", async () => { const profile = cloneProfile(p); data.profiles.push(profile); data.activeProfileId = profile.id; recordChange("复制套装", profile.name); modalMode = null; await save(); render(); toast("已复制套装"); });
+      box.querySelector("[data-new]").addEventListener("click", async () => { const profile = { id: makeId(), name: "新岗位套装", sections: [] }; data.profiles.push(profile); data.activeProfileId = profile.id; recordChange("新增套装", profile.name); modalMode = null; await saveSharedAndView(); render(); showProfileDialog(); });
+      box.querySelector("[data-clone]").addEventListener("click", async () => { const profile = cloneProfile(p); data.profiles.push(profile); data.activeProfileId = profile.id; recordChange("复制套装", profile.name); modalMode = null; await saveSharedAndView(); render(); toast("已复制套装"); });
       box.querySelector("[data-export]").addEventListener("click", exportData);
       box.querySelector("[data-import-json]").addEventListener("click", () => box.querySelector("[data-json-file]").click());
       box.querySelector("[data-json-file]").addEventListener("change", importJson);
@@ -576,21 +786,32 @@
       root.querySelector("[data-clear-history]").addEventListener("click", async () => {
         if (!data.history.length || !confirm("确定清空全部修改记录吗？")) return;
         data.history = [];
-        await save();
+        await saveShared();
         closeModal();
         toast("修改记录已清空");
       });
     } else if (mode.type === "import") {
       dialog("批量 Markdown 导入", `
-        <div class="rfa-help">格式规则：\n# 套装: 校招产品经理\n## 教育经历\n- [复制] 学校名称: 示例大学\n- [展示] 就读时间: 2020.09 - 2024.06\n\n长文本可写在下一行并缩进两个空格。即使复制时换行和空格都被删除，也会按格式标记自动识别。再次导入会新增一个套装，不会覆盖现有数据。</div>
+        <div class="rfa-help">格式规则：\n# 套装: 校招产品经理\n## 教育经历\n- [复制] 学校名称: 示例大学\n- [展示] 就读时间: 2020.09 - 2024.06\n\n包含“# 套装”时会新增一个套装；只有“## 板块”时会追加到当前套装。可直接粘贴板块复制按钮生成的内容。即使复制时换行和空格都被删除，也会自动识别。</div>
         <textarea class="rfa-textarea rfa-import-text" name="markdown" placeholder="# 套装: 岗位名称&#10;## 基本信息&#10;- [复制] 姓名: 张三&#10;- [展示] 可入职时间: 一个月内"></textarea>`, {
         saveText: "解析并导入",
         onSave: async (box) => {
           try {
-            const profile = parseMarkdown(box.querySelector('[name="markdown"]').value);
-            data.profiles.push(profile); data.activeProfileId = profile.id; modalMode = null;
-            recordChange("批量导入套装", profile.name);
-            await save(); render(); toast(`已导入 ${profile.sections.reduce((n, s) => n + s.fields.length, 0)} 个字段`);
+            const parsed = parseMarkdown(box.querySelector('[name="markdown"]').value);
+            const fieldCount = parsed.sections.reduce((n, s) => n + s.fields.length, 0);
+            modalMode = null;
+            if (parsed.hasProfileHeading) {
+              const { hasProfileHeading, ...profile } = parsed;
+              data.profiles.push(profile); data.activeProfileId = profile.id;
+              recordChange("批量导入套装", profile.name);
+              await saveSharedAndView(); render(); toast(`已导入新套装，共 ${fieldCount} 个字段`);
+            } else {
+              for (const section of parsed.sections) {
+                p.sections.push(section);
+                recordChange("导入板块", p.name, section.name);
+              }
+              await saveShared(); render({ preserveScroll: true }); toast(`已向当前套装添加 ${parsed.sections.length} 个板块`);
+            }
           } catch (error) { toast(error.message); }
         }
       });
@@ -611,13 +832,14 @@
       .replace(/([^\n])(?=[-*]\s*\[(?:复制|展示)\]\s*)/g, "$1\n");
     const lines = normalized.split("\n");
     let name = "导入的岗位套装";
+    let hasProfileHeading = false;
     const sections = [];
     let currentSection = null;
     let currentField = null;
     for (const raw of lines) {
       const line = raw.trimEnd();
       const profileMatch = line.match(/^#\s+(?:套装|岗位|方案)\s*[:：]\s*(.+)$/);
-      if (profileMatch) { name = profileMatch[1].trim(); continue; }
+      if (profileMatch) { name = profileMatch[1].trim(); hasProfileHeading = true; continue; }
       const sectionMatch = line.match(/^##\s+(.+)$/);
       if (sectionMatch) { currentSection = { id: makeId(), name: sectionMatch[1].trim(), fields: [] }; sections.push(currentSection); currentField = null; continue; }
       const fieldMatch = line.match(/^\s*[-*]\s*\[(复制|展示)\]\s*([^:：]+)\s*[:：]\s*(.*)$/);
@@ -630,7 +852,7 @@
     }
     const count = sections.reduce((total, section) => total + section.fields.length, 0);
     if (!count) throw new Error("没有识别到字段，请检查格式");
-    return { id: makeId(), name, sections };
+    return { id: makeId(), name, sections, hasProfileHeading };
   }
 
   function exportData() {
@@ -646,8 +868,9 @@
       const parsed = JSON.parse(await file.text());
       if (!Array.isArray(parsed.profiles) || !parsed.profiles.length) throw new Error();
       data = parsed; data.panel ||= defaultData().panel; data.history = Array.isArray(data.history) ? data.history : [];
+      delete data.panel.hidden;
       recordChange("导入备份", activeProfile()?.name || "—");
-      modalMode = null; await save(); render(); toast("备份已导入");
+      modalMode = null; await saveSharedAndView(); render(); toast("备份已导入");
     } catch (_) { toast("备份文件格式不正确"); }
   }
 
@@ -666,24 +889,52 @@
       const left = Math.max(4, Math.min(window.innerWidth - width - 4, drag.left + event.clientX - drag.x));
       const top = Math.max(4, Math.min(window.innerHeight - 48, drag.top + event.clientY - drag.y));
       panel.style.left = `${left}px`; panel.style.right = "auto"; panel.style.top = `${top}px`;
+      positionSectionNav();
     });
     root.addEventListener("pointerup", async () => {
       if (drag) {
         const rect = root.querySelector(".rfa-panel").getBoundingClientRect();
-        data.panel.top = Math.round(rect.top); data.panel.right = Math.round(window.innerWidth - rect.right); drag = null; await save();
+        data.panel.top = Math.round(rect.top); data.panel.right = Math.round(window.innerWidth - rect.right); drag = null; await saveView();
       }
     });
     const observer = new ResizeObserver(async (entries) => {
       if (!data || data.panel.collapsed) return;
       const rect = entries[0].contentRect;
-      if (rect.width > 0 && rect.height > 0) { data.panel.width = Math.round(rect.width); data.panel.height = Math.round(rect.height); await save(); }
+      if (rect.width > 0 && rect.height > 0) { data.panel.width = Math.round(rect.width); data.panel.height = Math.round(rect.height); await saveView(); }
+      positionSectionNav();
     });
     observer.observe(root.querySelector(".rfa-panel"));
+    window.addEventListener("resize", positionSectionNav, { passive: true });
   }
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type !== "RESUME_ASSISTANT_TOGGLE") return;
-    data.panel.hidden = !data.panel.hidden; save(); render();
+    if (message?.type === "RESUME_ASSISTANT_SELECT_PROFILE") {
+      if (data?.profiles?.some((item) => item.id === message.profileId)) {
+        data.activeProfileId = message.profileId;
+        render({ preserveScroll: true });
+      }
+      return;
+    }
+    if (message?.type !== "RESUME_ASSISTANT_TOGGLE" && message?.type !== "RESUME_ASSISTANT_SHOW") return;
+    if (!data) {
+      showAfterLoad = message.type === "RESUME_ASSISTANT_SHOW" ? true : !showAfterLoad;
+      return;
+    }
+    isPanelVisible = message.type === "RESUME_ASSISTANT_SHOW" ? true : !isPanelVisible;
+    if (isPanelVisible) data.panel.collapsed = false;
+    saveView(); render();
+  });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local" || !data) return;
+    const fresh = changes[STORAGE_KEY]?.newValue;
+    if (!fresh?.profiles?.length || fresh.revision === data.revision) return;
+    if (modalMode) {
+      pendingRemoteData = fresh;
+      toast("检测到其他页面的新修改，关闭当前窗口后将自动同步");
+      return;
+    }
+    applyRemoteData(fresh);
   });
 
   load();

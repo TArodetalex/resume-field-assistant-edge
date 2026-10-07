@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>简历字段助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header><span class="mark">CV</span><div><h1>简历字段助手</h1><p id="version">版本</p></div></header>
+  <main>
+    <div class="summary"><span>已有套装</span><strong id="profile-count">0</strong></div>
+    <label for="profile-select">选择本页使用的套装</label>
+    <select id="profile-select"></select>
+    <button id="show-panel">显示固定侧栏</button>
+    <div id="status" class="status" aria-live="polite">等待操作</div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

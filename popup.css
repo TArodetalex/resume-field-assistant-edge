@@ -1,0 +1,18 @@
+* { box-sizing: border-box; }
+body { width: 290px; margin: 0; color: #172033; background: #f6f8fc; font: 13px/1.45 Inter, "Microsoft YaHei", system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; color: white; background: #172554; }
+.mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: #4f7cff; font-size: 12px; font-weight: 800; }
+h1 { margin: 0; font-size: 15px; }
+header p { margin: 2px 0 0; color: #bdc9e8; font-size: 11px; }
+main { padding: 14px; }
+.summary { display: flex; align-items: center; justify-content: space-between; margin-bottom: 13px; padding: 10px 11px; border: 1px solid #e1e6f0; border-radius: 10px; background: white; }
+.summary strong { color: #315fe8; font-size: 20px; }
+label { display: block; margin-bottom: 5px; color: #596579; font-size: 11px; font-weight: 700; }
+select, button { width: 100%; height: 36px; border-radius: 9px; font: inherit; }
+select { margin-bottom: 10px; padding: 0 9px; border: 1px solid #d6dce8; background: white; color: #202c40; }
+button { border: 0; background: #315fe8; color: white; cursor: pointer; font-weight: 750; }
+button:hover { background: #244fcf; }
+button:disabled { cursor: wait; opacity: .65; }
+.status { margin-top: 9px; padding: 8px 10px; border-radius: 8px; background: #e9edf5; color: #667188; text-align: center; font-size: 12px; }
+.status.success { background: #e5f7ec; color: #197242; }
+.status.error { background: #fdebed; color: #b52d43; }
